@@ -149,7 +149,7 @@ def get_first_level_path(file_path):
 
 
 def main(repo_path, repo_branch, start_hash, end_hash):
-    amendments_file_path = repo_path + "/readme/BREAKING_CHANGES_AMENDMENTS.markdown"
+    amendments_file_path = repo_path + "/readme/BREAKING_CHANGES_AMENDMENTS.md"
 
     liferay_portal_ee_repo = git.Repo(repo_path)
 
