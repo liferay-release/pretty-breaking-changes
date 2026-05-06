@@ -153,25 +153,36 @@ def main(repo_path, repo_branch, start_hash, end_hash):
 
     liferay_portal_ee_repo = git.Repo(repo_path)
 
-    print("Checkout " + repo_branch + " and pull ...")
+    print("[1/5] Checkout " + repo_branch + " and pull ...")
     liferay_portal_ee_repo.git.checkout(repo_branch)
     liferay_portal_ee_repo.git.fetch('--all')
     liferay_portal_ee_repo.git.reset('--hard', 'origin/' + repo_branch)
 
-    print("Retrieving git info ...")
+    print("[2/5] Retrieving git info (" + start_hash + ".." + end_hash + ") ...")
 
     of_interest = liferay_portal_ee_repo.git.log(start_hash + ".." + end_hash, "--grep", "# breaking",
                                                  "--pretty=format:%H")
     # of_interest = liferay_portal_ee_repo.git.log("--grep", "breaking_change_report", "--pretty=format:%H")
 
-    print("Processing git info ...")
+    individual_commit_hashes = [h for h in of_interest.split('\n') if h]
+    total_commits = len(individual_commit_hashes)
 
-    individual_commit_hashes = of_interest.split('\n')
+    print("[3/5] Processing " + str(total_commits) + " commit(s) ...")
 
-    breaking_changes_info = {
-        h: decorate_breaking_change_info(result, {'committed_date': liferay_portal_ee_repo.commit(h).committed_date})
-        for h
-        in individual_commit_hashes if (result := dissect_commit_message(liferay_portal_ee_repo.commit(h).message))}
+    breaking_changes_info = {}
+    matched = 0
+    for idx, h in enumerate(individual_commit_hashes, start=1):
+        print("  (" + str(idx) + "/" + str(total_commits) + ") " + h, flush=True)
+        commit = liferay_portal_ee_repo.commit(h)
+        result = dissect_commit_message(commit.message)
+        if result:
+            breaking_changes_info[h] = decorate_breaking_change_info(
+                result, {'committed_date': commit.committed_date})
+            matched += 1
+
+    print("        " + str(matched) + " of " + str(total_commits) + " commit(s) yielded breaking-change entries.")
+
+    print("[4/5] Applying amendments from " + amendments_file_path + " ...")
 
     with open(amendments_file_path) as f:
         amendments = f.read()
@@ -180,6 +191,7 @@ def main(repo_path, repo_branch, start_hash, end_hash):
     interesting_indexes = [(i, type_of) for i in range(len(parsed)) if
                            (type_of := parsed[0][i]['type']) == 'heading' or type_of == 'block_code']
 
+    amendments_applied = 0
     i = 0
     while i <= len(interesting_indexes) - 2:
         if interesting_indexes[i][1] == 'heading' and interesting_indexes[i + 1][1] == 'block_code':
@@ -196,15 +208,18 @@ def main(repo_path, repo_branch, start_hash, end_hash):
                                                                                             git_hash).committed_date})
 
                 if len(breaking_changes_info[git_hash]) > 0:
-                    print("Amending: " + str(breaking_changes_info[git_hash][0]['jira_ticket']))
+                    amendments_applied += 1
+                    print("  amending: " + str(breaking_changes_info[git_hash][0]['jira_ticket']) + " (" + git_hash[:8] + ")")
                 else:
-                    print("Error processing amendment message " + git_hash)
+                    print("  ERROR processing amendment message " + git_hash)
                     print(amended_message)
                     print()
 
             i += 2
         else:
             i += 1
+
+    print("        " + str(amendments_applied) + " amendment(s) applied.")
 
     affected_file_paths_and_hashes = {}
 
@@ -225,7 +240,9 @@ def main(repo_path, repo_branch, start_hash, end_hash):
             else:
                 affected_file_paths_and_hashes[first_level_path][affected_file_path] = [change]
 
-    print("Generating output ...")
+    file_count = sum(len(v) for v in affected_file_paths_and_hashes.values())
+    print("[5/5] Generating output: " + str(file_count) + " affected file(s) across "
+          + str(len(affected_file_paths_and_hashes)) + " top-level path(s)) ...")
 
     entire_output = ""
 
@@ -262,6 +279,8 @@ def main(repo_path, repo_branch, start_hash, end_hash):
     entire_output_fh.write(entire_output)
 
     entire_output_fh.close()
+
+    print("Done. Wrote report.md (" + str(len(entire_output)) + " chars).")
 
 
 if __name__ == '__main__':
