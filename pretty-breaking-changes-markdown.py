@@ -148,6 +148,13 @@ def get_first_level_path(file_path):
     return first_level_path
 
 
+def is_in_commit_range(repo, git_hash, start_hash, end_hash):
+    try:
+        return repo.is_ancestor(start_hash, git_hash) and not repo.is_ancestor(end_hash, git_hash)
+    except git.exc.GitCommandError:
+        return False
+
+
 def main(repo_path, repo_branch, start_hash, end_hash):
     amendments_file_path = repo_path + "/readme/BREAKING_CHANGES_AMENDMENTS.md"
 
@@ -187,20 +194,20 @@ def main(repo_path, repo_branch, start_hash, end_hash):
     with open(amendments_file_path) as f:
         amendments = f.read()
 
-    parsed = markdown.parse(amendments)
-    interesting_indexes = [(i, type_of) for i in range(len(parsed)) if
-                           (type_of := parsed[0][i]['type']) == 'heading' or type_of == 'block_code']
+    tokens, _ = markdown.parse(amendments)
+
+    interesting_indexes = [(i, type_of) for i in range(len(tokens)) if
+                           (type_of := tokens[i]['type']) == 'heading' or type_of == 'block_code']
 
     amendments_applied = 0
     i = 0
     while i <= len(interesting_indexes) - 2:
         if interesting_indexes[i][1] == 'heading' and interesting_indexes[i + 1][1] == 'block_code':
-            git_hash = parsed[interesting_indexes[i][0]]['children'][0]['text']
+            git_hash = tokens[interesting_indexes[i][0]]['children'][0]['raw']
 
-            if git_hash in breaking_changes_info or (
-                    liferay_portal_ee_repo.is_ancestor(start_hash, git_hash) and not liferay_portal_ee_repo.is_ancestor(
-                    end_hash, git_hash)):
-                amended_message = parsed[interesting_indexes[i + 1][0]]['text']
+            if git_hash in breaking_changes_info or is_in_commit_range(liferay_portal_ee_repo, git_hash,
+                                                                      start_hash, end_hash):
+                amended_message = tokens[interesting_indexes[i + 1][0]]['raw']
                 breaking_changes_info[git_hash] = decorate_breaking_change_info(dissect_commit_message(amended_message),
                                                                                 {
                                                                                     'committed_date':
