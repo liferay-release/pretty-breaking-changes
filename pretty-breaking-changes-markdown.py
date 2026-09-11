@@ -4,8 +4,11 @@ import sys
 import git
 import mistune
 import os
+import re
 
 breaking_change_report_keyword = "# breaking"
+
+revert_footer_pattern = re.compile(r'This reverts commit ([0-9a-f]{7,40})')
 
 markdown = mistune.create_markdown(renderer='ast')
 
@@ -148,11 +151,48 @@ def get_first_level_path(file_path):
     return first_level_path
 
 
+def get_reverted_commit_hashes(repo, start_hash, end_hash):
+    raw_reverts = repo.git.log(start_hash + ".." + end_hash, "--grep", "This reverts commit",
+                               "--pretty=format:%H%x1f%B%x1e")
+
+    reverters_by_hash = {}
+
+    for raw_revert in raw_reverts.split('\x1e'):
+        reverter_hash, _, revert_message = raw_revert.partition('\x1f')
+
+        reverter_hash = reverter_hash.strip()
+
+        if not reverter_hash:
+            continue
+
+        for reverted_hash in revert_footer_pattern.findall(revert_message):
+            if len(reverted_hash) < 40:
+                try:
+                    reverted_hash = repo.git.rev_parse(reverted_hash + "^{commit}")
+                except git.exc.GitCommandError:
+                    continue
+
+            reverters_by_hash.setdefault(reverted_hash, []).append(reverter_hash)
+
+    return {git_hash for git_hash in reverters_by_hash if is_reverted(git_hash, reverters_by_hash, set())}
+
+
 def is_in_commit_range(repo, git_hash, start_hash, end_hash):
     try:
         return repo.is_ancestor(start_hash, git_hash) and not repo.is_ancestor(end_hash, git_hash)
     except git.exc.GitCommandError:
         return False
+
+
+def is_reverted(git_hash, reverters_by_hash, visited_hashes):
+    if git_hash in visited_hashes:
+        return False
+
+    for reverter_hash in reverters_by_hash.get(git_hash, []):
+        if not is_reverted(reverter_hash, reverters_by_hash, visited_hashes | {git_hash}):
+            return True
+
+    return False
 
 
 def main(repo_path, repo_branch, start_hash, end_hash):
@@ -171,8 +211,16 @@ def main(repo_path, repo_branch, start_hash, end_hash):
                                                  "--pretty=format:%H")
     # of_interest = liferay_portal_ee_repo.git.log("--grep", "breaking_change_report", "--pretty=format:%H")
 
+    reverted_commit_hashes = get_reverted_commit_hashes(liferay_portal_ee_repo, start_hash, end_hash)
+
     individual_commit_hashes = [h for h in of_interest.split('\n') if h]
+
+    reverted_commit_count = len([h for h in individual_commit_hashes if h in reverted_commit_hashes])
+
+    individual_commit_hashes = [h for h in individual_commit_hashes if h not in reverted_commit_hashes]
     total_commits = len(individual_commit_hashes)
+
+    print("        " + str(reverted_commit_count) + " commit(s) reverted within the range, ignored.")
 
     print("[3/5] Processing " + str(total_commits) + " commit(s) ...")
 
